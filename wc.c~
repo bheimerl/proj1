@@ -1,0 +1,213 @@
+#include "wc.h"
+#include <time.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <sys/wait.h>
+#include <unistd.h>
+#include <sys/types.h>
+
+int main(int argc, char **argv)
+{
+  long fsize;
+  FILE *fp;
+  count_t total, count, buf;
+  struct timespec begin, end;
+  int nChildProc = 0;
+  long childOffset = 0;
+  long endOff = 0;
+  long startOff = 0;
+  int wstatus;
+		
+  /* 1st arg: filename */
+  if(argc < 2) {
+    printf("usage: wc <filname> [# processes] [crash rate]\n");
+    return 0;
+  }
+		
+  /* 2nd (optional) arg: number of child processes */
+  if (argc > 2) {
+
+    nChildProc = atoi(argv[2]);
+    if(nChildProc < 1) nChildProc = 1;
+    if(nChildProc > 10) nChildProc = 10;
+
+  }
+
+  /* 3rd (optional) arg: crash rate between 0% and 100%. Each child process has that much chance to crash*/
+  if(argc > 3) {
+
+    crashRate = atoi(argv[3]);
+    if(crashRate < 0) crashRate = 0;
+    if(crashRate > 50) crashRate = 50;
+    printf("crashRate RATE: %d\n", crashRate);
+
+  }
+		
+  printf("# of Child Processes: %d\n", nChildProc);
+  printf("crashRate RATE: %d\%\n", crashRate);
+
+
+  pid_t pid;
+  int childArr[nChildProc][2];
+
+
+
+  total.linecount = 0;
+  total.wordcount = 0;
+  total.charcount = 0;
+
+  // start to measure time
+  clock_gettime(CLOCK_REALTIME, &begin);
+
+
+  fp = fopen(argv[1], "r");
+
+  if (fp == NULL) {
+    printf("File open error: %s\n", argv[1]);
+    printf("usage: wc <filname>\n");
+    return 0;
+  }
+
+  fseek(fp, 0L, SEEK_END);
+  fsize = ftell(fp);
+  
+  childOffset = (fsize / nChildProc);
+
+  /* word_count() has 3 arguments.
+   * 1st: file descriptor
+   * 2nd: starting offset
+   * 3rd: number of bytes to count from the offset
+   */
+
+  fclose(fp);
+
+  for (int i = 0; i  < nChildProc; i++) {
+    if (pipe(childArr[i]) != 0) {
+      exit(1);
+    }
+
+    pid = fork();
+
+    if (pid < 0) {
+      printf("Fork failure.\n");
+      exit(1);
+    } else if (pid == 0) {
+      //Child
+      fp = fopen(argv[1], "r");
+      endOff = ((i + 1) * childOffset);      
+      if (i != 0) {
+	startOff = (i * childOffset) + (childOffset % 2);
+      }
+      count = word_count(fp, startOff, endOff);
+      fclose(fp);
+
+      close(childArr[i][0]);
+      
+      //sending
+
+      long sendem;
+
+      if ( ( sendem = write(childArr[i][1], &count, sizeof(count))) == -1) {
+	printf("Writing into pipe failed.\n");
+	exit(1);
+      };
+
+      printf("Child  process %d sent %ld bytes (%'d lines, %'d words, %'d chars) \n",getpid(), sendem, count.linecount, count.wordcount, count.charcount);
+      close(childArr[i][1]);
+
+      _exit(0);
+            
+    } // end else If
+    
+  } // end For
+
+  for (int k = 0; k < nChildProc; k++) {
+
+    waitpid(childArr[k], &wstatus, 0);
+    printf("child [%d] ", k);
+    if(WIFEXITED(wstatus)) printf("terminated normally. The Exit status %d\n", WEXITSTATUS(wstatus));
+    if(WIFSIGNALED(wstatus)) {
+      printf("terminated by a signal %d\n", WTERMSIG(wstatus));
+
+      if (pipe(childArr[k]) != 0) {
+	exit(1);
+      }
+
+      pid = fork();
+
+      if (pid < 0) {
+	printf("Fork failure.\n");
+	exit(1);
+      } else if (pid == 0) {
+	//Child
+	fp = fopen(argv[1], "r");
+	endOff = ((k + 1) * childOffset);      
+	if (k != 0) {
+	  startOff = (k * childOffset) + (childOffset % 2);
+	}
+	count = word_count(fp, startOff, endOff);
+	fclose(fp);
+
+	close(childArr[k][0]);
+      
+	//sending
+
+	long sendem;
+
+	if ( ( sendem = write(childArr[k][1], &count, sizeof(count))) == -1) {
+	  printf("Writing into pipe failed.\n");
+	  exit(1);
+	};
+
+	printf("Child  process %d sent %ld bytes (%'d lines, %'d words, %'d chars) \n",getpid(), sendem, count.linecount, count.wordcount, count.charcount);
+	close(childArr[k][1]);
+
+	_exit(0);
+      }
+    }
+    
+  }
+
+  /*while(wait(NULL) != -1) {};*/
+
+  long readEm;
+
+  for (int j = 0; j < nChildProc; j++) {
+
+    if ((readEm = read(childArr[j][0], &buf, sizeof(buf)) ) ==-1) {
+      printf("Reading from pipe failed.\n");
+      exit(1);
+    };
+
+    if (readEm){
+            
+      printf("Parent process %d read %ld bytes (%'d lines, %'d words, %'d chars) \n",getpid(), readEm, buf.linecount, buf.wordcount, buf.charcount);
+
+      total.linecount += buf.linecount;
+      total.wordcount += buf.wordcount;
+      total.charcount += buf.charcount;
+    }
+                    
+    close(childArr[j][0]);
+    close(childArr[j][1]);
+  } // end parent For
+    
+
+    
+    
+
+  clock_gettime(CLOCK_REALTIME, &end);
+  long seconds = end.tv_sec - begin.tv_sec;
+  long nanoseconds = end.tv_nsec - begin.tv_nsec;
+  double elapsed = seconds + nanoseconds*1e-9;
+
+  // Write to pipe here
+  printf("\n========= %s =========\n", argv[1]);
+  printf("Total Lines : %d \n", total.linecount);
+  printf("Total Words : %d \n", total.wordcount);
+  printf("Total Characters : %d \n", total.charcount);
+  printf("======== Took %.3f seconds ========\n", elapsed);
+
+  return(0);
+}
+

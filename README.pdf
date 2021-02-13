@@ -1,0 +1,19 @@
+Student ID: 811368527
+Braden Trent Heimerl
+
+The way I designed the multi-process struct is to loop and fork from the parent
+n number of times, where n is the input for number of child processes to have
+been created. I piped before I forked so that all of the child processes would
+maintain a consistent method of communicating with the parent process. Given the
+use of the ordinary pipe, the only communication possible in this setup is
+between parent and child.
+
+Errors:
+My process makes use of the waitpid() function from the parent for each of the
+child processes. In the case that a child process is to terminate, I fork again
+from the parent and wait for a new response from the child thread. After
+the signal is recieved, assuming there are no errors this time around, the parent
+process will sum the piped totals from the child. Using a variety of count_t
+structs made this more acheivable by allowing word_count() to be filtered
+more by only conditionally summing the result (so nothing from and branch to fail
+for example)
